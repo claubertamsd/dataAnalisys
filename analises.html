@@ -587,13 +587,55 @@ function nf(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g
 
 /* Try to find a column name (key) in row keys using keywords */
 function findKey(keys, keywords){
-  for(const k of keys){
-    const clean = nf(k);
-    for(const kw of keywords){
-      if(clean.includes(nf(kw))) return k;
-    }
+  for(const kw of keywords){
+    const normalizedKeyword = nf(kw);
+    const exactMatch = keys.find(k => nf(k) === normalizedKeyword);
+    if (exactMatch) return exactMatch;
+  }
+
+  for(const kw of keywords){
+    const normalizedKeyword = nf(kw);
+    const partialMatch = keys.find(k => nf(k).includes(normalizedKeyword));
+    if (partialMatch) return partialMatch;
   }
   return null;
+}
+
+function classifyStatus(rawStatus) {
+  const original = String(rawStatus || '');
+  const normalized = nf(original);
+
+  const isInsucesso = /(insucesso|perda|cancel|desist|sem sucesso)/.test(normalized);
+  const isSucesso = !isInsucesso && /(sucesso|vendido|faturado)/.test(normalized);
+  const isAndamento = !isInsucesso && !isSucesso && /(andamento|negociacao|aberto|tratativa)/.test(normalized);
+
+  return {
+    statusOriginal: original,
+    statusDisplay: original.toUpperCase(),
+    isInsucesso,
+    isSucesso,
+    isAndamento
+  };
+}
+
+function normalizeInsucessoMotivo(rawMotivo) {
+  const motivo = nf(rawMotivo);
+
+  if (motivo.includes('contato sem sucesso')) return 'CONTATO SEM SUCESSO';
+  if (motivo.includes('condicao comercial')) return 'CONDICAO COMERCIAL';
+  if (motivo.includes('desistiu da compra') || motivo.includes('desistencia')) return 'DESISTIU DA COMPRA';
+  if (motivo.includes('comprou na concorrencia') || motivo.includes('concorrencia')) return 'COMPROU NA CONCORRENCIA';
+
+  return String(rawMotivo || '').trim() || '(SEM MOTIVO)';
+}
+
+function isCanonicalInsucessoMotivo(motivoNormalizado) {
+  return [
+    'CONTATO SEM SUCESSO',
+    'CONDICAO COMERCIAL',
+    'DESISTIU DA COMPRA',
+    'COMPROU NA CONCORRENCIA'
+  ].includes(motivoNormalizado);
 }
 
 /* FIX PARA GRÁFICOS - Estabiliza resize loop */
@@ -635,17 +677,11 @@ document.getElementById('fileInput').addEventListener('change', async (e)=>{
   
   try {
     if (fileName.endsWith('.csv')) {
-      // Parse CSV
+      // Parse CSV (robusto para vírgulas e quebras de linha entre aspas)
       const text = await f.text();
-      const lines = text.trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^\"|\"$/g, ''));
-      
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim().replace(/^\"|\"$/g, ''));
-        const row = {};
-        headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
-        rows.push(row);
-      }
+      const wb = XLSX.read(text, { type: 'string', raw: false });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       console.log('✅ CSV importado com sucesso');
     } else if (fileName.endsWith('.tsv')) {
       // Parse TSV
@@ -763,6 +799,7 @@ function applyFilters() {
   
   updateInsucessosCharts(filteredInsucessos);
   updateKPIs(filteredInsucessos);
+  updateDataTable(filteredInsucessos);
 }
 
 function clearFilters() {
@@ -773,6 +810,7 @@ function clearFilters() {
   filteredInsucessos = [...allInsucessos];
   updateInsucessosCharts(filteredInsucessos);
   updateKPIs(filteredInsucessos);
+  updateDataTable(filteredInsucessos);
 }
 
 function filterTable(searchTerm) {
@@ -868,30 +906,33 @@ function processRows(rows){
       fluxoData[vend].cadastradoPorOutro++;
     }
     
-    const status = String(r[keyStatus]||'').toUpperCase();
-    const isInsucesso = status.includes('INSUCESSO') || status.includes('PERDA') || status.includes('CANCEL');
-    const isSucesso = status.includes('SUCESSO') || status.includes('VENDIDO');
-    const isAndamento = status.includes('ANDAMENTO');
+    const statusInfo = classifyStatus(r[keyStatus]);
+    const status = statusInfo.statusDisplay;
+    const motivo = normalizeInsucessoMotivo(r[keyMotivo]);
+    const isInsucessoByMotivo = isCanonicalInsucessoMotivo(motivo);
+    const isInsucessoRecord = statusInfo.isInsucesso || isInsucessoByMotivo;
     
     vendors[vend].total++;
-    if(isSucesso) vendors[vend].sucessos++;
-    else if(isInsucesso) vendors[vend].insucessos++;
-    else if(isAndamento) vendors[vend].andamento++;
+    if(isInsucessoRecord) vendors[vend].insucessos++;
+    else if(statusInfo.isSucesso) vendors[vend].sucessos++;
+    else if(statusInfo.isAndamento) vendors[vend].andamento++;
     
     vendors[vend].statusBD[status] = (vendors[vend].statusBD[status]||0)+1;
     
-    const motivo = String(r[keyMotivo]||'').trim() || '(SEM MOTIVO)';
-    vendors[vend].motivos[motivo] = (vendors[vend].motivos[motivo]||0)+1;
     const origem = String(r[keyOrigem]||'').trim() || '(SEM ORIGEM)';
-    vendors[vend].origens[origem] = (vendors[vend].origens[origem]||0)+1;
     const temp = String(r[keyTemperatura]||'').trim() || '(SEM)';
-    vendors[vend].temps[temp] = (vendors[vend].temps[temp]||0)+1;
     const dias = parseFloat(String(r[keyDias]||'').replace(',','.')) || null;
-    if(dias!==null && !isNaN(dias)) vendors[vend].tempos.push(dias);
-    vendors[vend].clientes.push({
-      cliente: r[keyCliente]||'',
-      motivo, origem, temp, dias, status
-    });
+
+    if (isInsucessoRecord) {
+      vendors[vend].motivos[motivo] = (vendors[vend].motivos[motivo]||0)+1;
+      vendors[vend].origens[origem] = (vendors[vend].origens[origem]||0)+1;
+      vendors[vend].temps[temp] = (vendors[vend].temps[temp]||0)+1;
+      if(dias!==null && !isNaN(dias)) vendors[vend].tempos.push(dias);
+      vendors[vend].clientes.push({
+        cliente: r[keyCliente]||'',
+        motivo, origem, temp, dias, status
+      });
+    }
     vendors[vend].records.push(r);
   });
 
@@ -934,7 +975,7 @@ function processRows(rows){
     slideEl.querySelector('.slide-subtitle').textContent = 
       `📊 ${data.total} leads | ✅ ${data.sucessos} sucessos (${taxaSucesso}%) | ❌ ${data.insucessos} insucessos (${taxaInsucesso}%) | ⏳ ${data.andamento} andamento`;
     
-    slideEl.querySelector('.slide-total-insucessos').textContent = `${data.sucessos}/${data.total}`;
+    slideEl.querySelector('.slide-total-insucessos').textContent = `${data.insucessos}/${data.total}`;
 
     const motivosSorted = Object.entries(data.motivos).sort((a,b)=>b[1]-a[1]);
     const topMotivo = motivosSorted[0] ? motivosSorted[0][0] : '(nenhum)';
@@ -1034,20 +1075,24 @@ function processRows(rows){
 
   renderSummaryChart(vendorList, motiveList);
   
-  // Prepare all data (not just failures)
+  // Prepare only insucesso records for dashboard de insucessos
   allInsucessos = [];
   rows.forEach(r => {
-    const status = String(r[keyStatus]||'').toUpperCase();
-    // Capture ALL records, but mark status
+    const statusInfo = classifyStatus(r[keyStatus]);
+    const motivoNormalizado = normalizeInsucessoMotivo(r[keyMotivo]);
+    const isInsucessoByMotivo = isCanonicalInsucessoMotivo(motivoNormalizado);
+    const isInsucessoRecord = statusInfo.isInsucesso || isInsucessoByMotivo;
+    if (!isInsucessoRecord) return;
+
     allInsucessos.push({
       vendedor: r[keyVendedor] || '(SEM VENDEDOR)',
       cliente: r[keyCliente] || '',
-      motivo: String(r[keyMotivo]||'').trim() || '(SEM MOTIVO)',
+      motivo: motivoNormalizado,
       origem: String(r[keyOrigem]||'').trim() || '(SEM ORIGEM)',
       temperatura: String(r[keyTemperatura]||'').trim() || '(SEM)',
       dias: parseFloat(String(r[keyDias]||'').replace(',','.')) || 0,
       data: r[keyData] || '',
-      status: status,
+      status: statusInfo.statusDisplay,
       tipo_evento: String(r[keyStatus]||'')
     });
   });
