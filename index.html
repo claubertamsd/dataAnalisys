@@ -141,6 +141,17 @@
       </div>
     </header>
 
+    <div id="loadingOverlay" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-[1px] z-50 flex items-center justify-center p-4">
+      <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6">
+        <h3 class="text-lg font-bold text-slate-800 mb-2">Processando planilha</h3>
+        <p id="loadingMessage" class="text-sm text-slate-600 mb-4">Iniciando...</p>
+        <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+          <div id="loadingBar" class="h-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all duration-200" style="width: 0%"></div>
+        </div>
+        <p id="loadingPercent" class="text-right text-sm font-semibold text-slate-700 mt-2">0%</p>
+      </div>
+    </div>
+
     <section class="bg-white rounded-2xl shadow-lg p-6 mb-6 animate-fade-in">
       <div class="flex items-center gap-3 mb-4">
         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
@@ -150,6 +161,35 @@
       <p class="mt-3 text-sm text-slate-500 bg-slate-50 p-3 rounded-lg">
         <span class="font-medium text-slate-700">📋 Formato esperado:</span> Arquivo .xlsx ou .csv contendo colunas como: <em>Nome Cliente, Vendedor Loja, Vendedor de BDC, Origem, Mídia, Temperatura, Marca, Modelo, Status, Motivo, Dias Em Aberto, Data Inclusão, Data Conclusão</em>.
       </p>
+    </section>
+
+    <section id="successFailureHighlight" class="hidden bg-white rounded-2xl shadow-lg p-6 mb-6 animate-fade-in">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-slate-800">Destaque Geral: Sucessos x Insucessos</h2>
+        <span class="text-sm text-slate-500">Visão consolidada da base importada</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="rounded-xl p-4 bg-emerald-50 border border-emerald-200">
+          <p class="text-sm font-medium text-emerald-700">Sucessos</p>
+          <p id="kpi-highlight-sucessos" class="text-3xl font-extrabold text-emerald-700">0</p>
+        </div>
+
+        <div class="rounded-xl p-4 bg-red-50 border border-red-200">
+          <p class="text-sm font-medium text-red-700">Insucessos</p>
+          <p id="kpi-highlight-insucessos" class="text-3xl font-extrabold text-red-700">0</p>
+        </div>
+
+        <div class="rounded-xl p-4 bg-blue-50 border border-blue-200">
+          <p class="text-sm font-medium text-blue-700">Taxa de Sucesso</p>
+          <p id="kpi-highlight-taxa-sucesso" class="text-3xl font-extrabold text-blue-700">0%</p>
+        </div>
+
+        <div class="rounded-xl p-4 bg-orange-50 border border-orange-200">
+          <p class="text-sm font-medium text-orange-700">Taxa de Insucesso</p>
+          <p id="kpi-highlight-taxa-insucesso" class="text-3xl font-extrabold text-orange-700">0%</p>
+        </div>
+      </div>
     </section>
 
     <section id="controls" class="hidden bg-white rounded-2xl shadow-lg p-6 mb-6 animate-fade-in">
@@ -638,6 +678,85 @@ function isCanonicalInsucessoMotivo(motivoNormalizado) {
   ].includes(motivoNormalizado);
 }
 
+const valueLabelPlugin = {
+  id: 'valueLabelPlugin',
+  afterDatasetsDraw(chart, args, pluginOptions) {
+    const opts = Object.assign({
+      enabled: true,
+      color: '#0f172a',
+      fontSize: 11,
+      fontFamily: 'sans-serif',
+      decimalPlaces: 0
+    }, pluginOptions || {});
+
+    if (!opts.enabled) return;
+
+    const { ctx, chartArea } = chart;
+    const chartType = chart.config.type;
+    const isHorizontalBar = chartType === 'bar' && chart.options?.indexAxis === 'y';
+
+    ctx.save();
+    ctx.fillStyle = opts.color;
+    ctx.font = `${opts.fontSize}px ${opts.fontFamily}`;
+    ctx.textBaseline = 'middle';
+
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      const meta = chart.getDatasetMeta(datasetIndex);
+      if (!meta || meta.hidden) return;
+
+      meta.data.forEach((element, index) => {
+        const raw = dataset.data?.[index];
+        if (raw === null || raw === undefined || raw === '') return;
+
+        const numeric = Number(raw);
+        const label = Number.isFinite(numeric)
+          ? numeric.toFixed(opts.decimalPlaces)
+          : String(raw);
+
+        if (!label || label === 'NaN') return;
+
+        const pos = element.tooltipPosition();
+        let x = pos.x;
+        let y = pos.y;
+
+        if (chartType === 'bar') {
+          if (isHorizontalBar) {
+            x = Math.min(pos.x + 10, chartArea.right - 12);
+            y = pos.y;
+            ctx.textAlign = 'left';
+          } else {
+            x = pos.x;
+            y = Math.max(pos.y - 10, chartArea.top + 10);
+            ctx.textAlign = 'center';
+          }
+        } else if (chartType === 'pie' || chartType === 'doughnut') {
+          x = pos.x;
+          y = pos.y;
+          ctx.textAlign = 'center';
+        } else {
+          x = pos.x;
+          y = Math.max(pos.y - 8, chartArea.top + 10);
+          ctx.textAlign = 'center';
+        }
+
+        if (x >= chartArea.left && x <= chartArea.right && y >= chartArea.top && y <= chartArea.bottom) {
+          ctx.fillText(label, x, y);
+        }
+      });
+    });
+
+    ctx.restore();
+  }
+};
+
+Chart.register(valueLabelPlugin);
+Chart.defaults.plugins.valueLabelPlugin = {
+  enabled: true,
+  decimalPlaces: 0,
+  fontSize: 11,
+  color: '#0f172a'
+};
+
 /* FIX PARA GRÁFICOS - Estabiliza resize loop */
 function fixChartResize(canvas) {
   canvas.style.height = '100%';
@@ -667,6 +786,47 @@ function cleanupResizeObservers() {
   slideCharts = [];
 }
 
+function showLoading(message = 'Iniciando...', percent = 0) {
+  const overlay = document.getElementById('loadingOverlay');
+  overlay.classList.remove('hidden');
+  setLoadingProgress(percent, message);
+}
+
+function setLoadingProgress(percent, message = null) {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  document.getElementById('loadingBar').style.width = `${safePercent}%`;
+  document.getElementById('loadingPercent').textContent = `${safePercent}%`;
+  if (message !== null) {
+    document.getElementById('loadingMessage').textContent = message;
+  }
+}
+
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.add('hidden');
+}
+
+function readFileWithProgress(file, mode, onProgress) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onprogress = (event) => {
+      if (event.lengthComputable && typeof onProgress === 'function') {
+        const percent = (event.loaded / event.total) * 100;
+        onProgress(percent);
+      }
+    };
+
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Falha ao ler arquivo'));
+
+    if (mode === 'arrayBuffer') {
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.readAsText(file);
+    }
+  });
+}
+
 /* Read file and parse - Suporta XLSX, CSV e TSV */
 document.getElementById('fileInput').addEventListener('change', async (e)=>{
   const f = e.target.files[0];
@@ -674,18 +834,26 @@ document.getElementById('fileInput').addEventListener('change', async (e)=>{
   
   let rows = [];
   const fileName = f.name.toLowerCase();
+  showLoading('Lendo arquivo...', 2);
   
   try {
     if (fileName.endsWith('.csv')) {
       // Parse CSV (robusto para vírgulas e quebras de linha entre aspas)
-      const text = await f.text();
+      const text = await readFileWithProgress(f, 'text', (p) => {
+        setLoadingProgress(2 + (p * 0.28), 'Lendo arquivo CSV...');
+      });
+      setLoadingProgress(35, 'Interpretando CSV...');
       const wb = XLSX.read(text, { type: 'string', raw: false });
       const ws = wb.Sheets[wb.SheetNames[0]];
       rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      setLoadingProgress(55, 'CSV convertido para tabela');
       console.log('✅ CSV importado com sucesso');
     } else if (fileName.endsWith('.tsv')) {
       // Parse TSV
-      const text = await f.text();
+      const text = await readFileWithProgress(f, 'text', (p) => {
+        setLoadingProgress(2 + (p * 0.28), 'Lendo arquivo TSV...');
+      });
+      setLoadingProgress(35, 'Processando TSV...');
       const lines = text.trim().split('\n');
       const headers = lines[0].split('\t').map(h => h.trim());
       
@@ -694,27 +862,43 @@ document.getElementById('fileInput').addEventListener('change', async (e)=>{
         const row = {};
         headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
         rows.push(row);
+
+        if (i % 300 === 0 || i === lines.length - 1) {
+          const parseProgress = i / Math.max(1, lines.length - 1);
+          setLoadingProgress(35 + (parseProgress * 20), 'Convertendo linhas TSV...');
+        }
       }
       console.log('✅ TSV importado com sucesso');
     } else {
       // Parse XLSX
-      const data = await f.arrayBuffer();
+      const data = await readFileWithProgress(f, 'arrayBuffer', (p) => {
+        setLoadingProgress(2 + (p * 0.28), 'Lendo arquivo XLSX...');
+      });
+      setLoadingProgress(35, 'Interpretando planilha XLSX...');
       const wb = XLSX.read(data, {type:'array', cellDates:true});
       const ws = wb.Sheets[wb.SheetNames[0]];
       rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+      setLoadingProgress(55, 'XLSX convertido para tabela');
       console.log('✅ XLSX importado com sucesso');
     }
     
     // Filter out header/title rows (skip empty rows and rows without proper data)
+    setLoadingProgress(65, 'Filtrando linhas válidas...');
     rows = rows.filter(row => {
       const values = Object.values(row).filter(v => v && String(v).trim());
       return values.length > 0 && (row['Empresa'] || row['Evento'] || row['Vendedor Loja'] || row['Nome Cliente']);
     });
     
     console.log(`📊 ${rows.length} linhas válidas encontradas`);
-    processRows(rows);
+    setLoadingProgress(72, 'Calculando indicadores...');
+    processRows(rows, (progress, message) => {
+      setLoadingProgress(72 + (progress * 0.28), message);
+    });
+    setLoadingProgress(100, 'Concluído!');
+    setTimeout(() => hideLoading(), 350);
   } catch (err) {
     console.error('❌ Erro ao processar arquivo:', err);
+    hideLoading();
     alert('Erro ao processar arquivo. Verifique o console para mais detalhes.');
   }
 });
@@ -724,6 +908,7 @@ let current = 0;
 let autoplayId = null;
 let allInsucessos = [];
 let filteredInsucessos = [];
+let allLeadsStats = { total: 0, sucessos: 0, insucessos: 0, andamento: 0 };
 
 /* Tab Management */
 function switchTab(tabName) {
@@ -848,7 +1033,7 @@ function exportToCSV() {
   link.click();
 }
 
-function processRows(rows){
+function processRows(rows, onProgress = null){
   if(!rows || rows.length===0){ alert('Planilha vazia'); return; }
 
   // Limpa ResizeObservers anteriores
@@ -873,8 +1058,11 @@ function processRows(rows){
 
   const vendors = {};
   const fluxoData = {}; // Para rastrear cadastros por vendedor
+  const overallStats = { total: 0, sucessos: 0, insucessos: 0, andamento: 0 };
+  const progressStep = Math.max(1, Math.floor(rows.length / 120));
   
-  rows.forEach(r=>{
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const r = rows[rowIndex];
     const vend = r[keyVendedor] || '(SEM VENDEDOR)';
     if(!vendors[vend]) vendors[vend] = {
       total:0, sucessos:0, insucessos:0, andamento:0,
@@ -909,8 +1097,12 @@ function processRows(rows){
     const statusInfo = classifyStatus(r[keyStatus]);
     const status = statusInfo.statusDisplay;
     const motivo = normalizeInsucessoMotivo(r[keyMotivo]);
-    const isInsucessoByMotivo = isCanonicalInsucessoMotivo(motivo);
-    const isInsucessoRecord = statusInfo.isInsucesso || isInsucessoByMotivo;
+    const isInsucessoRecord = statusInfo.isInsucesso;
+
+    overallStats.total++;
+    if (isInsucessoRecord) overallStats.insucessos++;
+    else if (statusInfo.isSucesso) overallStats.sucessos++;
+    else if (statusInfo.isAndamento) overallStats.andamento++;
     
     vendors[vend].total++;
     if(isInsucessoRecord) vendors[vend].insucessos++;
@@ -934,7 +1126,15 @@ function processRows(rows){
       });
     }
     vendors[vend].records.push(r);
-  });
+
+    if (onProgress && (rowIndex % progressStep === 0 || rowIndex === rows.length - 1)) {
+      const processed = rowIndex + 1;
+      const progress = (processed / rows.length) * 100;
+      onProgress(progress, `Processando registros (${processed}/${rows.length})...`);
+    }
+  }
+
+  if (onProgress) onProgress(100, 'Montando visualizações...');
 
   const container = document.getElementById('slidesContainer');
   container.innerHTML = '';
@@ -999,11 +1199,11 @@ function processRows(rows){
 
     const ul = slideEl.querySelector('.list-insights');
     const insights = [
-      `📈 Performance: ${taxaSucesso}% de sucesso`,
-      `🎯 Principais clientes atendidos: ${data.clientes.length}`,
-      `💼 Maior concentração: ${Object.entries(data.statusBD).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'N/A'}`,
-      `⏰ Média de permanência: ${media} dias`,
-      `🔥 Maior desafio: ${topMotivo}`
+      `📈 Taxa de sucesso no período: ${taxaSucesso}%`,
+      `🎯 Registros de insucesso analisados: ${data.clientes.length}`,
+      `💼 Status mais frequente da carteira: ${Object.entries(data.statusBD).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'N/A'}`,
+      `⏰ Média de dias em aberto (insucessos): ${media} dias`,
+      `🔥 Motivo de insucesso mais recorrente: ${topMotivo}`
     ];
     ul.innerHTML = '';
     insights.forEach(i=>{
@@ -1080,8 +1280,7 @@ function processRows(rows){
   rows.forEach(r => {
     const statusInfo = classifyStatus(r[keyStatus]);
     const motivoNormalizado = normalizeInsucessoMotivo(r[keyMotivo]);
-    const isInsucessoByMotivo = isCanonicalInsucessoMotivo(motivoNormalizado);
-    const isInsucessoRecord = statusInfo.isInsucesso || isInsucessoByMotivo;
+    const isInsucessoRecord = statusInfo.isInsucesso;
     if (!isInsucessoRecord) return;
 
     allInsucessos.push({
@@ -1098,6 +1297,7 @@ function processRows(rows){
   });
   
   filteredInsucessos = [...allInsucessos];
+  allLeadsStats = overallStats;
   
   console.log('✅ Total de insucessos carregados:', allInsucessos.length);
   console.log('✅ Primeiros 3 insucessos:', allInsucessos.slice(0, 3));
@@ -1122,6 +1322,25 @@ function processRows(rows){
   
   // Update fluxo de loja dashboard
   updateFluxoLojaSection(fluxoData);
+
+  // Update destaque de sucessos x insucessos
+  updateSuccessFailureHighlight(allLeadsStats);
+}
+
+function updateSuccessFailureHighlight(stats) {
+  const total = stats.total || 0;
+  const sucessos = stats.sucessos || 0;
+  const insucessos = stats.insucessos || 0;
+
+  const taxaSucesso = total > 0 ? ((sucessos / total) * 100).toFixed(1) : '0.0';
+  const taxaInsucesso = total > 0 ? ((insucessos / total) * 100).toFixed(1) : '0.0';
+
+  document.getElementById('kpi-highlight-sucessos').textContent = sucessos;
+  document.getElementById('kpi-highlight-insucessos').textContent = insucessos;
+  document.getElementById('kpi-highlight-taxa-sucesso').textContent = `${taxaSucesso}%`;
+  document.getElementById('kpi-highlight-taxa-insucesso').textContent = `${taxaInsucesso}%`;
+
+  document.getElementById('successFailureHighlight').classList.remove('hidden');
 }
 
 function populateFilters() {
@@ -1602,28 +1821,65 @@ function renderSummaryChart(vendorList, motiveList){
 document.getElementById('downloadSlideBtn').addEventListener('click', async ()=>{
   const slideEl = document.querySelectorAll('.slide')[current];
   if(!slideEl) return alert('Nenhum slide visível');
-  await exportElementToPdf(slideEl, `Slide-${current+1}.pdf`);
+  try {
+    setExportButtonsDisabled(true);
+    showLoading('Gerando PDF do slide...', 10);
+    await exportElementToPdf(slideEl, `Slide-${current+1}.pdf`);
+    setLoadingProgress(100, 'Download iniciado');
+    setTimeout(() => hideLoading(), 250);
+  } catch (err) {
+    console.error('❌ Falha ao exportar slide:', err);
+    hideLoading();
+    alert('Não foi possível gerar o PDF do slide. Tente novamente.');
+  } finally {
+    setExportButtonsDisabled(false);
+  }
 });
 
 /* Download all slides as multi-page PDF */
 document.getElementById('downloadAllBtn').addEventListener('click', async ()=>{
   const slidesEls = document.querySelectorAll('.slide');
   if(!slidesEls.length) return alert('Nenhum slide para exportar.');
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({orientation:'landscape', unit:'pt', format:'a4'});
-  for(let i=0;i<slidesEls.length;i++){
-    const el = slidesEls[i];
-    el.classList.add('active');
-    const canvas = await html2canvas(el, {scale:2});
-    const img = canvas.toDataURL('image/png');
-    const imgProps = pdf.getImageProperties(img);
-    const pdfWidth = pdf.internal.pageSize.getWidth() - 40;
-    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-    if(i>0) pdf.addPage();
-    pdf.addImage(img, 'PNG', 20, 20, pdfWidth, pdfHeight);
-    if(i!==current) el.classList.remove('active');
+  try {
+    setExportButtonsDisabled(true);
+    showLoading('Gerando PDF completo...', 5);
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({orientation:'landscape', unit:'pt', format:'a4'});
+
+    for(let i=0;i<slidesEls.length;i++){
+      const el = slidesEls[i];
+      el.classList.add('active');
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
+      const canvas = await html2canvas(el, {
+        scale: 1.2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+      const img = canvas.toDataURL('image/jpeg', 0.82);
+      const imgProps = pdf.getImageProperties(img);
+      const pdfWidth = pdf.internal.pageSize.getWidth() - 40;
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      if(i>0) pdf.addPage();
+      pdf.addImage(img, 'JPEG', 20, 20, pdfWidth, pdfHeight, undefined, 'FAST');
+      if(i!==current) el.classList.remove('active');
+
+      const progress = 5 + Math.round(((i + 1) / slidesEls.length) * 90);
+      setLoadingProgress(progress, `Gerando PDF completo... (${i + 1}/${slidesEls.length})`);
+    }
+
+    pdf.save('Apresentacao_Vendas_Perdidas.pdf');
+    setLoadingProgress(100, 'Download iniciado');
+    setTimeout(() => hideLoading(), 250);
+  } catch (err) {
+    console.error('❌ Falha ao exportar PDF completo:', err);
+    hideLoading();
+    alert('Não foi possível gerar o PDF completo. Tente novamente.');
+  } finally {
+    setExportButtonsDisabled(false);
   }
-  pdf.save('Apresentacao_Vendas_Perdidas.pdf');
 });
 
 /* helper to export a single element */
@@ -1631,15 +1887,32 @@ async function exportElementToPdf(el, filename){
   const { jsPDF } = window.jspdf;
   const wasVisible = el.classList.contains('active');
   el.classList.add('active');
-  const canvas = await html2canvas(el, {scale:2});
-  const img = canvas.toDataURL('image/png');
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  const canvas = await html2canvas(el, {
+    scale: 1.2,
+    useCORS: true,
+    logging: false,
+    backgroundColor: '#ffffff'
+  });
+  const img = canvas.toDataURL('image/jpeg', 0.85);
   const pdf = new jsPDF({orientation:'landscape', unit:'pt', format:'a4'});
   const imgProps = pdf.getImageProperties(img);
   const pdfWidth = pdf.internal.pageSize.getWidth() - 40;
   const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-  pdf.addImage(img, 'PNG', 20, 20, pdfWidth, pdfHeight);
+  pdf.addImage(img, 'JPEG', 20, 20, pdfWidth, pdfHeight, undefined, 'FAST');
   pdf.save(filename);
   if(!wasVisible) el.classList.remove('active');
+}
+
+function setExportButtonsDisabled(disabled) {
+  const allBtn = document.getElementById('downloadAllBtn');
+  const slideBtn = document.getElementById('downloadSlideBtn');
+  [allBtn, slideBtn].forEach(btn => {
+    if (!btn) return;
+    btn.disabled = disabled;
+    btn.classList.toggle('opacity-60', disabled);
+    btn.classList.toggle('cursor-not-allowed', disabled);
+  });
 }
 
 </script>
